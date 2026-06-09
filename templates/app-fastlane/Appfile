@@ -1,0 +1,4 @@
+app_identifier("<BUNDLE_ID>")
+
+# Apple ID / team_id are intentionally omitted: the lanes authenticate with an
+# App Store Connect API key (ASC_* env), which needs no Apple ID, password, or 2FA.

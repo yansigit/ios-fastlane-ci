@@ -1,0 +1,20 @@
+name: iOS Screenshots
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "Upload captured screenshots to the draft App Store version"
+        type: boolean
+        default: false
+concurrency:
+  group: ios-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  screenshots:
+    uses: yansigit/ios-fastlane-ci/.github/workflows/ios-screenshots.yml@main
+    with:
+      upload: ${{ inputs.upload }}
+    secrets:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}

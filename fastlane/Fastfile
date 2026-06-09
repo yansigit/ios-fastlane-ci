@@ -1,0 +1,207 @@
+# frozen_string_literal: true
+#
+# ──────────────────────────────────────────────────────────────────────────
+#  SHARED iOS Fastfile  ·  github.com/yansigit/ios-fastlane-ci
+# ──────────────────────────────────────────────────────────────────────────
+#  One copy of the release / beta / screenshots lanes for EVERY iOS app.
+#  An app pulls these lanes in with one line in its own fastlane/Fastfile:
+#
+#      import_from_git(
+#        url: "https://github.com/yansigit/ios-fastlane-ci.git",
+#        branch: "main",
+#        path: "fastlane/Fastfile"
+#      )
+#
+#  Everything app-specific (scheme, bundle id, project vs workspace, devices)
+#  is read from ENV — set those in the app's committed `fastlane/.env.default`
+#  (fastlane auto-loads it via dotenv). Secrets come from the CI environment.
+#
+#  This file is intentionally identical in spirit to the soniche-ios Fastfile
+#  it was extracted from: App Store Connect API-key auth (keyless, no 2FA),
+#  match in readonly mode, and a build number derived from TestFlight at build
+#  time via xcargs — so it works with GENERATE_INFOPLIST_FILE projects without
+#  ever mutating project.pbxproj on CI.
+# ──────────────────────────────────────────────────────────────────────────
+
+default_platform(:ios)
+
+# ── Config from ENV (set in the app's fastlane/.env.default) ────────────────
+def cfg(key, default = nil)
+  v = ENV[key]
+  v.nil? || v.strip.empty? ? default : v
+end
+
+def cfg!(key)
+  cfg(key) || UI.user_error!("Missing required env var #{key} (set it in fastlane/.env.default)")
+end
+
+def bundle_id;     cfg!("FL_BUNDLE_ID"); end
+def scheme;        cfg!("FL_SCHEME"); end
+def output_dir;    cfg("FL_OUTPUT_DIR", "build"); end
+def configuration; cfg("FL_CONFIGURATION", "Release"); end
+
+# An app builds from EITHER a workspace (CocoaPods) OR a project (SPM only).
+# Set exactly one of FL_WORKSPACE / FL_PROJECT.
+def project_options
+  ws   = cfg("FL_WORKSPACE")
+  proj = cfg("FL_PROJECT")
+  if ws && proj
+    UI.user_error!("Set only one of FL_WORKSPACE / FL_PROJECT, not both")
+  elsif ws
+    { workspace: ws }
+  elsif proj
+    { project: proj }
+  else
+    UI.user_error!("Set FL_WORKSPACE (pods) or FL_PROJECT (SPM) in fastlane/.env.default")
+  end
+end
+
+# ── App Store Connect API key (keyless auth — no Apple ID / password / 2FA) ──
+def asc_api_key
+  app_store_connect_api_key(
+    key_id: ENV.fetch("ASC_KEY_ID"),
+    issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+    key_content: ENV.fetch("ASC_API_KEY_P8"), # base64 of the AuthKey_XXXX.p8
+    is_key_content_base64: true,
+    in_house: false
+  )
+end
+
+# ── Signed App Store build ──────────────────────────────────────────────────
+# Forces Manual signing with the match-installed App Store profile. We do NOT
+# pass -allowProvisioningUpdates (that makes Xcode reach for a signed-in Apple
+# account and fails with "No Accounts" on CI). DEVELOPMENT_TEAM is already in
+# the project; CODE_SIGN_IDENTITY matches "Apple Distribution" by prefix.
+def build_signed(build_number)
+  match(type: "appstore", readonly: true, app_identifier: bundle_id)
+  profile = "match AppStore #{bundle_id}"
+  build_app(
+    **project_options,
+    scheme: scheme,
+    configuration: configuration,
+    export_method: "app-store",
+    output_directory: output_dir,
+    clean: true,
+    xcargs: %(CURRENT_PROJECT_VERSION=#{build_number} ) +
+            %(CODE_SIGN_STYLE=Manual ) +
+            %(CODE_SIGN_IDENTITY="Apple Distribution" ) +
+            %(PROVISIONING_PROFILE_SPECIFIER="#{profile}"),
+    export_options: {
+      signingStyle: "manual",
+      provisioningProfiles: { bundle_id => profile }
+    }
+  )
+end
+
+# Next build number = highest already on App Store Connect + 1 (ASC rejects
+# duplicates). initial_build_number: 0 → the first-ever upload becomes build 1.
+def next_build_number(api_key)
+  latest_testflight_build_number(
+    api_key: api_key,
+    app_identifier: bundle_id,
+    initial_build_number: 0
+  ) + 1
+end
+
+platform :ios do
+  before_all do
+    # On CI, create a throwaway keychain so match can install the signing
+    # assets without touching (or being blocked by) the runner's login keychain.
+    setup_ci if ENV["CI"]
+  end
+
+  # ── release ───────────────────────────────────────────────────────────────
+  desc "Build a signed App Store archive, upload to TestFlight, and push store " \
+       "metadata to the DRAFT version. Does NOT submit for review."
+  lane :release do
+    key = asc_api_key
+    build_signed(next_build_number(key))
+
+    upload_to_testflight(
+      api_key: key,
+      skip_submission: true,
+      skip_waiting_for_build_processing: true
+    )
+
+    # Push fastlane/metadata/** to the draft App Store version, then stop.
+    # submit_for_review: false → a human reviews and clicks Submit in ASC.
+    upload_to_app_store(
+      api_key: key,
+      app_identifier: bundle_id,
+      skip_binary_upload: true,
+      submit_for_review: false,
+      force: true, # no TTY on CI for the HTML preview
+      run_precheck_before_submit: false,
+      precheck_include_in_app_purchases: false
+    )
+
+    UI.success("✅ Build uploaded and metadata staged on the draft version. " \
+               "Review in App Store Connect, then Submit.")
+  end
+
+  # ── beta ────────────────────────────────────────────────────────────────────
+  desc "Build + upload to TestFlight only (no store metadata)."
+  lane :beta do
+    key = asc_api_key
+    build_signed(next_build_number(key))
+    upload_to_testflight(
+      api_key: key,
+      skip_submission: true,
+      skip_waiting_for_build_processing: true
+    )
+    UI.success("✅ Build uploaded to TestFlight.")
+  end
+
+  # ── screenshots ─────────────────────────────────────────────────────────────
+  desc "Capture localized App Store screenshots (reads fastlane/Snapfile), stage " \
+       "any real-device shots from fastlane/frameit/manual/, add caption banners " \
+       "+ device frames (frameit), and keep only the *_framed.png set.\n" \
+       "  fastlane screenshots             # capture + leave PNGs for review\n" \
+       "  fastlane screenshots upload:true # capture + push to the draft ASC version"
+  lane :screenshots do |options|
+    require "fileutils"
+
+    capture_screenshots # reads the app's Snapfile (devices, languages, scheme, only_testing)
+
+    screenshots_dir = File.expand_path(cfg("FL_SCREENSHOTS_PATH", "./fastlane/screenshots"), Dir.pwd)
+
+    # Stage real-device shots that can't be captured on a simulator (e.g. AR or
+    # GPU/LLM screens). They live OUTSIDE the output dir so capture's
+    # clear_previous_screenshots can't wipe them. A filename matching a captured
+    # shot overrides it; a new name adds one.
+    manual_dir = File.expand_path("fastlane/frameit/manual", Dir.pwd)
+    if File.directory?(manual_dir)
+      Dir.glob("#{manual_dir}/**/*.png").each do |src|
+        dest = File.join(screenshots_dir, src.sub("#{manual_dir}/", ""))
+        FileUtils.mkdir_p(File.dirname(dest))
+        FileUtils.cp(src, dest)
+        UI.message("Staged manual screenshot: #{File.basename(dest)}")
+      end
+    end
+
+    # Caption banners + device bezel (needs ImageMagick). Reads
+    # fastlane/screenshots/Framefile.json + <locale>/title.strings.
+    frame_screenshots(path: "./fastlane/screenshots")
+
+    # Drop the unframed originals; keep only the captioned set.
+    Dir.glob("#{screenshots_dir}/**/*.png").each do |file|
+      File.delete(file) unless File.basename(file).include?("_framed")
+    end
+
+    if options[:upload].to_s == "true"
+      upload_to_app_store(
+        api_key: asc_api_key,
+        app_identifier: bundle_id,
+        skip_binary_upload: true,
+        skip_metadata: true, # screenshots only; leave text metadata alone
+        overwrite_screenshots: true,
+        submit_for_review: false,
+        force: true,
+        run_precheck_before_submit: false
+      )
+      UI.success("✅ Screenshots captured and uploaded to the draft App Store version.")
+    else
+      UI.success("✅ Screenshots captured into fastlane/screenshots. Review, then commit them.")
+    end
+  end
+end

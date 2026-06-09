@@ -1,0 +1,10 @@
+# Signing assets live on this app repo's `match` branch, isolated from code.
+# CI authenticates with the built-in GITHUB_TOKEN (no PAT). Populate once with:
+#   bundle exec fastlane match appstore --readonly false
+git_url("https://github.com/yansigit/<REPO>.git")
+git_branch("match")
+storage_mode("git")
+
+type("appstore")
+app_identifier(["<BUNDLE_ID>"])
+readonly(true)

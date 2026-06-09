@@ -1,0 +1,15 @@
+{
+  "device_frame_version": "latest",
+  "default": {
+    "background": "../frameit/background.png",
+    "padding": 56,
+    "title_min_height": "20%",
+    "show_complete_frame": false,
+    "title_below_image": false,
+    "title": {
+      "font": "../frameit/fonts/Inter-Bold.ttf",
+      "color": "#FFFFFF"
+    }
+  },
+  "data": []
+}

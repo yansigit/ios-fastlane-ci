@@ -1,0 +1,77 @@
+name: iOS Release (reusable)
+
+# Reusable release/beta workflow. Heavy (archive + upload) and macOS minutes are
+# ~10x Linux, so callers trigger it manually or on a version tag — never per push.
+#
+#   jobs:
+#     release:
+#       uses: yansigit/ios-fastlane-ci/.github/workflows/ios-release.yml@main
+#       with:
+#         lane: release          # or beta
+#       secrets:
+#         ASC_KEY_ID:     ${{ secrets.ASC_KEY_ID }}
+#         ASC_ISSUER_ID:  ${{ secrets.ASC_ISSUER_ID }}
+#         ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+#         MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+#
+# Scheme / bundle id / project-vs-workspace are read by fastlane from the caller
+# repo's fastlane/.env.default — this workflow only runs the lane.
+
+on:
+  workflow_call:
+    inputs:
+      lane:      { type: string,  default: "release" }   # release | beta
+      runner:    { type: string,  default: "macos-26" }
+      xcode:     { type: string,  default: "latest-stable" }
+      uses_pods: { type: boolean, default: false }
+    secrets:
+      ASC_KEY_ID:     { required: true }
+      ASC_ISSUER_ID:  { required: true }
+      ASC_API_KEY_P8: { required: true }   # base64 of the AuthKey_XXXX.p8
+      MATCH_PASSWORD: { required: true }
+
+jobs:
+  release:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ inputs.xcode }}
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Install CocoaPods
+        if: ${{ inputs.uses_pods }}
+        run: bundle exec pod install
+
+      - name: Authorize match to read the signing assets (caller's `match` branch)
+        # match clones the certs from the caller's own private repo using the
+        # built-in GITHUB_TOKEN — no separate PAT secret needed.
+        run: |
+          echo "MATCH_GIT_BASIC_AUTHORIZATION=$(printf 'x-access-token:%s' '${{ github.token }}' | base64)" >> "$GITHUB_ENV"
+
+      - name: Run fastlane ${{ inputs.lane }}
+        run: bundle exec fastlane ${{ inputs.lane }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          FASTLANE_SKIP_UPDATE_CHECK: "true"
+          FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "120"
+
+      - name: Upload .ipa artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-ipa
+          path: build/*.ipa
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,83 @@
+name: iOS CI (reusable)
+
+# Reusable build + unit-test workflow. A caller repo invokes it with:
+#
+#   jobs:
+#     ci:
+#       uses: yansigit/ios-fastlane-ci/.github/workflows/ios-ci.yml@main
+#       with:
+#         scheme: TelluricAI
+#         project: TelluricAI.xcodeproj      # or `workspace:` for CocoaPods apps
+#         unit_test_target: TelluricAITests
+#
+# Builds for the simulator with signing disabled (no secrets needed), then runs
+# the unit-test target against a simulator picked dynamically (device names
+# drift between Xcode versions). The slow/flaky UI + screenshot flow lives in
+# ios-screenshots.yml, never here.
+
+on:
+  workflow_call:
+    inputs:
+      runner:            { type: string,  default: "macos-26" }
+      xcode:             { type: string,  default: "latest-stable" }
+      scheme:            { type: string,  required: true }
+      project:           { type: string,  default: "" }   # set this OR workspace
+      workspace:         { type: string,  default: "" }
+      unit_test_target:  { type: string,  default: "" }   # "" skips the test step
+      uses_pods:         { type: boolean, default: false }
+
+jobs:
+  build-and-test:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ inputs.xcode }}
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Install CocoaPods
+        if: ${{ inputs.uses_pods }}
+        run: bundle exec pod install
+
+      - name: Resolve container flag
+        id: container
+        run: |
+          if [ -n "${{ inputs.workspace }}" ]; then
+            echo "flag=-workspace ${{ inputs.workspace }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.project }}" ]; then
+            echo "flag=-project ${{ inputs.project }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Provide either project or workspace input."; exit 1
+          fi
+
+      - name: Build (simulator, unsigned)
+        run: |
+          xcodebuild ${{ steps.container.outputs.flag }} \
+            -scheme "${{ inputs.scheme }}" \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Run unit tests
+        if: ${{ inputs.unit_test_target != '' }}
+        run: |
+          # Pick an available iPhone simulator dynamically — names drift between
+          # Xcode versions, so don't hard-code one.
+          DEVICE_ID=$(xcrun simctl list devices available --json \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; c=[v for rt,vs in d.items() if "iOS" in rt for v in vs if v.get("isAvailable") and v["name"].startswith("iPhone")]; print(c[-1]["udid"] if c else "")')
+          echo "Using simulator: $DEVICE_ID"
+          xcodebuild ${{ steps.container.outputs.flag }} \
+            -scheme "${{ inputs.scheme }}" \
+            -destination "id=$DEVICE_ID" \
+            -only-testing:"${{ inputs.unit_test_target }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            test

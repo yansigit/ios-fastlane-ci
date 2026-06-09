@@ -1,0 +1,15 @@
+name: iOS CI
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+concurrency:
+  group: ios-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ci:
+    uses: yansigit/ios-fastlane-ci/.github/workflows/ios-ci.yml@main
+    with:
+      scheme: <SCHEME>
+      project: <APP>.xcodeproj        # or workspace: <APP>.xcworkspace
+      unit_test_target: <UNIT_TEST_TARGET>
+      # uses_pods: true                # CocoaPods apps only

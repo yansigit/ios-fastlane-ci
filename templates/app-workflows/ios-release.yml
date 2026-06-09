@@ -1,0 +1,24 @@
+name: iOS Release
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: "fastlane lane"
+        type: choice
+        options: [release, beta]
+        default: release
+  push:
+    tags: ["v*"]
+concurrency:
+  group: ios-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    uses: yansigit/ios-fastlane-ci/.github/workflows/ios-release.yml@main
+    with:
+      lane: ${{ github.event.inputs.lane || 'release' }}
+    secrets:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}

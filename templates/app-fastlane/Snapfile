@@ -1,0 +1,14 @@
+# Read by `capture_screenshots`. Names must match an installed simulator.
+workspace("<APP>.xcworkspace")   # or project("<APP>.xcodeproj")
+scheme("<SCHEME>")
+
+only_testing(["<UITEST_TARGET>/<SCREENSHOT_CLASS>"])
+
+devices(["iPhone 17 Pro Max"])   # 6.9" — required by Apple
+languages(["en-US"])
+
+output_directory("./fastlane/screenshots")
+clear_previous_screenshots(true)
+override_status_bar(true)
+concurrent_simulators(true)
+stop_after_first_error(true)

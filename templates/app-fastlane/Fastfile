@@ -1,0 +1,13 @@
+# frozen_string_literal: true
+#
+# App-specific Fastfile. All real logic lives in the shared lanes:
+#   https://github.com/yansigit/ios-fastlane-ci/blob/main/fastlane/Fastfile
+# Config the shared lanes read comes from fastlane/.env.default.
+
+import_from_git(
+  url: "https://github.com/yansigit/ios-fastlane-ci.git",
+  branch: "main",
+  path: "fastlane/Fastfile"
+)
+
+# Add app-only lanes here if needed; they can call the imported ones.
