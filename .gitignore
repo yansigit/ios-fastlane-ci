@@ -2,3 +2,25 @@
 vendor/bundle/
 .bundle/
 *.gem
+
+# Secrets / local env (keep committed .env.default templates)
+.env
+.env.*
+!.env.default
+!**/.env.default
+
+# Fastlane runtime artifacts (not template source under templates/)
+fastlane/report.xml
+fastlane/test_output/
+fastlane/Preview.html
+fastlane/screenshots/
+
+# Xcode / build artifacts
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+
+# IDE / logs
+.idea/
+*.log
